@@ -19,13 +19,15 @@ def get_batch(data, batch_size, max_len, device):
 def estimate_loss(model, eval_iters, train_data, val_data, batch_size, max_len, device):
     out = {}
     model.eval()
-    for data in [train_data, val_data]:
+    names = ['train','val']
+    data = [train_data, val_data]
+    for i in range(2):
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(data, batch_size, max_len, device)
+            X, Y = get_batch(data[i], batch_size, max_len, device)
             logits, loss = model(X, targets=Y)
             losses[k] = loss.item()
-        out[data] = losses.mean()
+        out[names[i]] = losses.mean()
     model.train()
     return out
 
