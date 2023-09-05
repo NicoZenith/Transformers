@@ -37,7 +37,7 @@ class Head(nn.Module):
         batch_size, max_len, d_model = x.shape
         k = self.key(x)   # (B,T,hs)
         q = self.query(x) # (B,T,hs)
-        self.tril = torch.tril(torch.ones(max_len, max_len), device = x.get_device())  # triangular inferior matrix for GPT 
+        self.tril = torch.tril(torch.ones(max_len, max_len)).to(x.get_device())  # triangular inferior matrix for GPT 
 
         # compute attention scores ("affinities")
         wei = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # (B, T, hs) @ (B, hs, T) -> (B, T, T)
