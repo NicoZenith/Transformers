@@ -2,6 +2,58 @@
 import torch 
 import os
 import random
+import numpy as np 
+import matplotlib.pyplot as plt
+
+from torch.utils.data import Dataset
+
+from torchtext.data.utils import get_tokenizer
+
+
+
+def save_fig_trainval(epoch, train_losses, val_losses, dir_files):
+    e = np.arange(0, epoch+1)
+    fig = plt.figure(figsize=(10,5))
+    ax1 = fig.add_subplot(121)
+    ax1.plot(e, train_losses, label='train loss')
+    ax1.plot(e, val_losses, label='validation loss')
+    ax1.set_xlabel('epochs')
+    ax1.set_ylabel('loss')
+    ax1.set_ylim(0, 8)
+    ax1.legend()
+    fig.savefig(dir_files + '_trainval.pdf')
+
+
+
+
+
+# Define a custom tokenizer that handles line breaks
+def custom_tokenizer(text):
+    basic_english_tokenizer = get_tokenizer('basic_english')
+    tokens = []
+    for paragraph in text.split('\n'):
+        tokens.extend(basic_english_tokenizer(paragraph))
+        # Add a token to represent line breaks
+        tokens.append('<br>')
+    return tokens
+
+
+class GPT_Dataset(Dataset):
+    def __init__(self, text, max_len):
+        self.inputs = []
+        self.labels = []
+        for i in range(len(text) - max_len):
+            x = text[i:i+max_len]
+            y = text[i+1:i+max_len + 1]
+            self.inputs.append(x)
+            self.labels.append(y)
+
+    def __len__(self):
+        return len(self.inputs)
+
+    def __getitem__(self, idx):
+        return torch.tensor(self.inputs[idx]), torch.tensor(self.labels[idx])
+
 
 
 
@@ -51,3 +103,6 @@ def _read_wiki(data_dir):
                   for line in lines if len(line.split(' . ')) >= 2]
     random.shuffle(paragraphs)
     return paragraphs
+
+
+
