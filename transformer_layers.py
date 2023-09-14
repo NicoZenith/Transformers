@@ -160,6 +160,47 @@ class MultiHeadAttention(nn.Module):
 
 
 
+
+
+class FeedForward(nn.Module):
+    """ a simple linear layer followed by a non-linearity """
+
+    def __init__(self, d_model, dropout):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.ReLU(),
+            nn.Linear(4 * d_model, d_model),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+class Block(nn.Module):
+    """ Transformer block: communication followed by computation """
+
+    def __init__(self, d_model, num_heads, dropout):
+        # n_embd: embedding dimension, n_head: the number of heads we'd like
+        super().__init__()
+        head_size = d_model // num_heads
+        self.sa = MultiHeadAttention(num_heads, head_size, d_model, dropout)
+        self.ffwd = FeedForward(d_model, dropout)
+        self.ln1 = nn.LayerNorm(d_model)
+        self.ln2 = nn.LayerNorm(d_model)
+
+    def forward(self, x, valid_lens=None, forward_mask=None):
+        x = self.ln1(x + self.sa(x, valid_lens, forward_mask))
+        x = self.ln2(x + self.ffwd(x))
+        return x
+
+
+
+
+
+
+
+
 class Seq2Seq(nn.Module):
     def __init__(self, d_model, dropout, max_len, vocab_size, num_heads, num_layers, device):
         super().__init__()
@@ -248,8 +289,7 @@ class Seq2Seq(nn.Module):
             x = enc_blk(x, valid_lens=valid_lens_x, forward_mask=None)
             store_context.append(x)
         
-        y = torch.ones((B, 1), dtype=torch.long)*start
-        
+        y = torch.ones((B, 1), dtype=torch.long, device=self.device)*start
         for t in range(max_new_tokens-1):
             valid_lens_y = torch.ones(B, dtype=torch.long)*(t+1)
             y_emb = self.token_embedding_table_decoder(y) 
@@ -266,14 +306,7 @@ class Seq2Seq(nn.Module):
             y_next = torch.multinomial(probs, num_samples=1) # (B, 1)
             #y_next = torch.argmax(logits, dim=-1)
             y = torch.cat((y, y_next), dim =1).long() # (B, T+1)
-        
-        # Find the positions of the EOS token in each sequence
-        eos_positions = (y == eos).nonzero() 
-        eos_positions+=1
-        # Create a mask to zero out values after the EOS token
-        mask = torch.arange(y.size(1)).unsqueeze(0).to(y.device) >= eos_positions.unsqueeze(1)
-        # Apply the mask to zero out values after the EOS token
-        y = y * mask
+         
         return y
 
 
@@ -361,39 +394,6 @@ class MultiHeadCrossAttention(nn.Module):
 
 
 
-
-
-class FeedForward(nn.Module):
-    """ a simple linear layer followed by a non-linearity """
-
-    def __init__(self, d_model, dropout):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(d_model, 4 * d_model),
-            nn.ReLU(),
-            nn.Linear(4 * d_model, d_model),
-            nn.Dropout(dropout),
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-class Block(nn.Module):
-    """ Transformer block: communication followed by computation """
-
-    def __init__(self, d_model, num_heads, dropout):
-        # n_embd: embedding dimension, n_head: the number of heads we'd like
-        super().__init__()
-        head_size = d_model // num_heads
-        self.sa = MultiHeadAttention(num_heads, head_size, d_model, dropout)
-        self.ffwd = FeedForward(d_model, dropout)
-        self.ln1 = nn.LayerNorm(d_model)
-        self.ln2 = nn.LayerNorm(d_model)
-
-    def forward(self, x, valid_lens=None, forward_mask=None):
-        x = self.ln1(x + self.sa(x, valid_lens, forward_mask))
-        x = self.ln2(x + self.ffwd(x))
-        return x
 
 
 class Decoder_Block(nn.Module):

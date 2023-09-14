@@ -11,6 +11,56 @@ from torchtext.data.utils import get_tokenizer
 
 
 
+class SimpleSeq2SeqDataset(Dataset):
+    def __init__(self, max_sequence_length=10, num_samples=1000, vocab_size=1000, eos_token=999, start_token=1):
+        self.max_sequence_length = max_sequence_length
+        self.num_samples = num_samples
+        self.vocab_size = vocab_size
+        self.eos_token = eos_token
+        self.start_token = start_token
+        self.data = self.generate_data()
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        input_seq, target_seq = self.data[idx]
+        input_seq, input_seq_length = self.pad_sequence(input_seq, start=False)
+        label_seq, _ = self.pad_sequence(target_seq, start=False)
+        target_seq, target_seq_length = self.pad_sequence(target_seq, start=True)
+        
+
+        return {
+            'input_seq': input_seq,
+            'target_seq': target_seq,
+            'input_seq_length': input_seq_length,
+            'target_seq_length': target_seq_length,
+            'label_seq' : label_seq
+        }
+
+    def generate_data(self):
+        data = []
+        for _ in range(self.num_samples):
+            sequence_length = torch.randint(1, self.max_sequence_length -1, (1,)).item()
+            sequence = torch.randint(2, self.vocab_size - 2, (sequence_length,))  # Use vocab_size - 1 to exclude EOS token and exclude start token 
+            reversed_sequence = torch.flip(sequence, [0])
+            data.append((sequence, reversed_sequence))
+        return data
+
+    def pad_sequence(self, sequence, start=False):
+        original_length = len(sequence) + 1
+        # Pad or truncate the sequence to the specified max_sequence_length
+        if len(sequence) < self.max_sequence_length:
+            padding_length = self.max_sequence_length - len(sequence)
+            if start:
+                sequence = torch.cat( (torch.tensor([self.start_token]), sequence, torch.tensor([self.eos_token]), torch.zeros(padding_length - 2, dtype=sequence.dtype) ) )
+            else:
+                sequence = torch.cat((sequence, torch.tensor([self.eos_token]), torch.zeros(padding_length - 1,  dtype=sequence.dtype)))
+        
+        return sequence, original_length
+
+
+
 def save_fig_trainval(epoch, train_losses, val_losses, dir_files):
     e = np.arange(0, epoch+1)
     fig = plt.figure(figsize=(10,5))
