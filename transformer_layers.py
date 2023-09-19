@@ -202,15 +202,15 @@ class Block(nn.Module):
 
 
 class Seq2Seq(nn.Module):
-    def __init__(self, d_model, dropout, max_len, vocab_size, num_heads, num_layers, device):
+    def __init__(self, d_model, dropout, max_len, vocab_size_source, vocab_size_target, num_heads, num_layers, device):
         super().__init__()
         self.device = device
         self.max_len = max_len
         self.num_layers = num_layers
-        self.token_embedding_table_encoder = nn.Embedding(vocab_size, d_model)
-        self.token_embedding_table_decoder = nn.Embedding(vocab_size, d_model)
+        self.token_embedding_table_encoder = nn.Embedding(vocab_size_source, d_model)
+        self.token_embedding_table_decoder = nn.Embedding(vocab_size_target, d_model)
         self.position_embedding = PositionalEncoding(d_model, dropout, max_len, device)
-        self.lm_head = nn.Linear(d_model, vocab_size)
+        self.lm_head = nn.Linear(d_model, vocab_size_target)
 
         self.encoder_blocks = nn.Sequential(*[Block(d_model, num_heads, dropout) for _ in range(num_layers)])
         self.decoder_blocks = nn.Sequential(*[Decoder_Block(d_model, num_heads, dropout) for _ in range(num_layers)])
@@ -306,32 +306,50 @@ class Seq2Seq(nn.Module):
             y_next = torch.multinomial(probs, num_samples=1) # (B, 1)
             #y_next = torch.argmax(logits, dim=-1)
             y = torch.cat((y, y_next), dim =1).long() # (B, T+1)
-         
-        return y
+        
+        truncated_sequences = []
+        for i in range(B):
+            sequence = y[i].tolist()
+            for j in range(len(sequence)):
+                if sequence[j] == eos:
+                    break
+            else:
+                j +=1  
+            sequence = sequence[:j]
+            truncated_sequences.append(sequence)
+                
+        return truncated_sequences
 
 
 
 
-def create_cross_attention_mask(input_valid_lens, target_valid_lens, max_len):
+def create_cross_attention_mask(input_valid_lens, target_valid_lens):
     """
-    Creates a cross-attention mask that adapts to the actual lengths of input and target sequences,
-    padded with 0s until input_max_len and target_max_len.
+    Creates a cross-attention mask that adapts to the actual lengths of input and target sequences.
     
     :param input_valid_lens: Valid lengths of the input sequences, dimension (batch_size,)
     :param target_valid_lens: Valid lengths of the target sequences, dimension (batch_size,)
-    :param input_max_len: Maximum length of the input sequence, padded with 0s if necessary
-    :param target_max_len: Maximum length of the target sequence, padded with 0s if necessary
     
     :return: Mask matrix for each data point of the batch,
-             with a square of ones in the upper left part of size input_valid_lens[i] x target_valid_lens[i],
-             dimension (batch_size, input_max_len, target_max_len)
+             with a square of ones in the upper left part of size target_valid_lens[i] x input_valid_lens[i],
+             dimension (batch_size, max_target_len, max_input_len)
     """
     batch_size = len(input_valid_lens)
-    input_mask = torch.arange(max_len).expand(batch_size, max_len) < input_valid_lens.unsqueeze(1)
-    target_mask = torch.arange(max_len).expand(batch_size, max_len) < target_valid_lens.unsqueeze(1)
-    mask = input_mask.unsqueeze(2) * target_mask.unsqueeze(1)
+    max_input_len = torch.max(input_valid_lens).item()
+    max_target_len = torch.max(target_valid_lens).item()
+
+    # Create masks directly based on the valid lengths using broadcasting
+    input_indices = torch.arange(max_input_len).expand(batch_size, max_input_len)  # (B, T_input)
+    target_indices = torch.arange(max_target_len).expand(batch_size, max_target_len)  # (B, T_target)
+
+    input_mask = input_indices < input_valid_lens.unsqueeze(1)
+    target_mask = target_indices < target_valid_lens.unsqueeze(1)
+    
+    mask = target_mask.unsqueeze(2) * input_mask.unsqueeze(1)  # Corrected order here
     mask = mask.float()
+    
     return mask
+
 
 
 
@@ -350,7 +368,6 @@ class Cross_Attention(nn.Module):
     def forward(self, x, y, valid_lens_x, valid_lens_y, forward_mask=None):
         # input of size (batch, time-step, channels)
         # output of size (batch, time-step, head size)
-        batch_size, max_len, d_model = x.shape
         k = self.key(x)   # (B,T,hs)
         q = self.query(y) # (B,T,hs)
         self.tril = torch.tril(torch.ones(q.size(1), k.size(1))).to(x.device)  # triangular inferior matrix for GPT 
@@ -361,7 +378,9 @@ class Cross_Attention(nn.Module):
         if forward_mask is not None:
             wei = wei.masked_fill(self.tril == 0, float('-inf')) # (B, T, T)
 
-        self.mask = create_cross_attention_mask(valid_lens_x, valid_lens_y, max_len).to(x.device)[:, :q.size(1), :]
+
+        self.mask = create_cross_attention_mask(valid_lens_x, valid_lens_y).to(x.device)[:, :q.size(1), :]
+
 
         wei = wei.masked_fill(self.mask == 0, float('-inf')) # (B, T, T)
         row_mask = torch.isinf(wei).all(dim=2)

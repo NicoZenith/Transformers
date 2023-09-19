@@ -11,6 +11,39 @@ from torchtext.data.utils import get_tokenizer
 
 
 
+
+
+
+
+
+def collate_batch(batch):
+    """
+    Collate function for custom dataset DataLoader.
+    
+    :param batch: List of batched data samples
+    :return: Batched data as a dictionary of tensors
+    """
+    input_seqs = [item['input_seq'] for item in batch]
+    target_seqs = [item['target_seq'] for item in batch]
+    label_seqs = [item['label_seq'] for item in batch]
+    input_lens = torch.tensor([item['input_seq_length'] for item in batch])
+    target_lens = torch.tensor([item['target_seq_length'] for item in batch])
+
+    # Pad sequences to the maximum sequence length in the batch
+    padded_input_seqs = torch.nn.utils.rnn.pad_sequence(input_seqs, batch_first=True, padding_value=0)
+    padded_target_seqs = torch.nn.utils.rnn.pad_sequence(target_seqs, batch_first=True, padding_value=0)
+    padded_label_seqs = torch.nn.utils.rnn.pad_sequence(label_seqs, batch_first=True, padding_value=0)
+
+    return {
+        'input_seq': padded_input_seqs,
+        'target_seq': padded_target_seqs,
+        'label_seq': padded_label_seqs,
+        'input_seq_length': input_lens,
+        'target_seq_length': target_lens
+    }
+
+
+
 class SimpleSeq2SeqDataset(Dataset):
     def __init__(self, max_sequence_length=10, num_samples=1000, vocab_size=1000, eos_token=999, start_token=1):
         self.max_sequence_length = max_sequence_length
@@ -51,11 +84,10 @@ class SimpleSeq2SeqDataset(Dataset):
         original_length = len(sequence) + 1
         # Pad or truncate the sequence to the specified max_sequence_length
         if len(sequence) < self.max_sequence_length:
-            padding_length = self.max_sequence_length - len(sequence)
             if start:
-                sequence = torch.cat( (torch.tensor([self.start_token]), sequence, torch.tensor([self.eos_token]), torch.zeros(padding_length - 2, dtype=sequence.dtype) ) )
+                sequence = torch.cat( (torch.tensor([self.start_token]), sequence,  ) )
             else:
-                sequence = torch.cat((sequence, torch.tensor([self.eos_token]), torch.zeros(padding_length - 1,  dtype=sequence.dtype)))
+                sequence = torch.cat((sequence, torch.tensor([self.eos_token])))
         
         return sequence, original_length
 
