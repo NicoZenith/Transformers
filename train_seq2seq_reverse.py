@@ -18,34 +18,17 @@ train_dataset = SimpleSeq2SeqDataset(max_sequence_length=max_len, num_samples=10
 val_dataset = SimpleSeq2SeqDataset(max_sequence_length=max_len, num_samples=1000, vocab_size=vocab_size, eos_token=vocab_size-1)
 
 
-# Create a DataLoader with a custom collate_fn (no need to pad in collate_fn now)
 batch_size = 64
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collate_batch, shuffle=True)
+val_dataloader = DataLoader(val_dataset, batch_size=batch_size, collate_fn=collate_batch, shuffle=False)
 
-
-# # Example of how to use the DataLoader
-# batch = next(iter(train_dataloader))
-# input_seqs = batch['input_seq']
-# target_seqs = batch['target_seq']
-# input_seq_lengths = batch['input_seq_length']
-# target_seq_lengths = batch['target_seq_length']
-# label_seqs = batch['label_seq']
-
-
-# # Your training loop or model training code here
-# print(input_seqs[0])
-# print(target_seqs[0])
-# print(label_seqs[0])
-# print(input_seq_lengths)
-# print(target_seq_lengths)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-model = Seq2Seq(d_model, dropout, max_len, vocab_size, num_heads, num_layers, device)
+model = Seq2Seq(d_model, dropout, max_len, vocab_size, vocab_size, num_heads, num_layers, device)
 model.to(device)
 
-num_epochs = 50
+num_epochs = 200
 learning_rate = 1e-4
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
