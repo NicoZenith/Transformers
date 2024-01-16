@@ -97,8 +97,6 @@ for e in range(num_epochs):
 
 
 
-
-
 batch_point = 10
 print(input_seqs[batch_point])
 print(target_seqs)

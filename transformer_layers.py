@@ -2,9 +2,7 @@ import torch
 import math
 import torch.nn as nn
 from torch.nn import functional as F
-
-
-
+from shared_variables import RELU, BIAS
 
 
 
@@ -105,9 +103,9 @@ class Self_Attention(nn.Module):
 
     def __init__(self, head_size, d_model, dropout):
         super().__init__()
-        self.key = nn.Linear(d_model, head_size, bias=False)
-        self.query = nn.Linear(d_model, head_size, bias=False)
-        self.value = nn.Linear(d_model, head_size, bias=False)
+        self.key = nn.Linear(d_model, head_size, bias=BIAS)
+        self.query = nn.Linear(d_model, head_size, bias=BIAS)
+        self.value = nn.Linear(d_model, head_size, bias=BIAS)
         # we don't need to use an triangular inferior matrix as it is bidirectional.
         # However, we want to adapt the mask to the input sequence length
         self.dropout = nn.Dropout(dropout)
@@ -116,8 +114,13 @@ class Self_Attention(nn.Module):
         # input of size (batch, time-step, channels)
         # output of size (batch, time-step, head size)
         batch_size, max_len, d_model = x.shape
-        k = self.key(x)   # (B,T,hs)
-        q = self.query(x) # (B,T,hs)
+        if RELU:
+            k = torch.relu(self.key(x))   # (B,T,hs)
+            q = torch.relu(self.query(x)) # (B,T,hs)
+        else:
+            k = self.key(x)
+            q = self.query(x)
+
         self.tril = torch.tril(torch.ones(max_len, max_len)).to(x.device)  # triangular inferior matrix for GPT 
 
         # compute attention scores ("affinities")
@@ -137,8 +140,14 @@ class Self_Attention(nn.Module):
             
         wei = self.dropout(wei)
         # perform the weighted aggregation of the values
-        v = self.value(x) # (B,T,hs)
+        if RELU:
+            v = torch.relu(self.value(x)) # (B,T,hs)
+        else: 
+            v = self.value(x)
         out = wei @ v # (B, T, T) @ (B, T, hs) -> (B, T, hs)
+
+        # Store k, q, v for hook
+        self.kqv_for_hook = (k, q, v)
         return out
 
 
@@ -154,11 +163,9 @@ class MultiHeadAttention(nn.Module):
     def forward(self, x, valid_lens=None, forward_mask=None):
         out = torch.cat([h(x, valid_lens, forward_mask) for h in self.heads], dim=-1)
         out = self.dropout(self.proj(out))
+        # Collect all outputs for hook
+        self.kqv_for_hook = self.heads[0].kqv_for_hook
         return out
-
-
-
-
 
 
 
@@ -168,14 +175,16 @@ class FeedForward(nn.Module):
     def __init__(self, d_model, dropout):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(d_model, 4 * d_model),
+            # nn.Linear(d_model, 4 * d_model, bias=True),
             nn.ReLU(),
-            nn.Linear(4 * d_model, d_model),
-            nn.Dropout(dropout),
+            # nn.Linear(4 * d_model, d_model),
+            # nn.Dropout(dropout),
         )
 
     def forward(self, x):
         return self.net(x)
+
+
 
 class Block(nn.Module):
     """ Transformer block: communication followed by computation """
@@ -190,13 +199,11 @@ class Block(nn.Module):
         self.ln2 = nn.LayerNorm(d_model)
 
     def forward(self, x, valid_lens=None, forward_mask=None):
-        x = self.ln1(x + self.sa(x, valid_lens, forward_mask))
-        x = self.ln2(x + self.ffwd(x))
+        x = x + self.sa(self.ln1(x), valid_lens, forward_mask)
+        self.kqv_for_hook = self.sa.kqv_for_hook
+        x = x + self.ffwd(self.ln2(x))
+        self.output_for_hook = x
         return x
-
-
-
-
 
 
 
@@ -357,9 +364,9 @@ class Cross_Attention(nn.Module):
 
     def __init__(self, head_size, d_model, dropout):
         super().__init__()
-        self.key = nn.Linear(d_model, head_size, bias=False)
-        self.query = nn.Linear(d_model, head_size, bias=False)
-        self.value = nn.Linear(d_model, head_size, bias=False)
+        self.key = nn.Linear(d_model, head_size, bias=BIAS)
+        self.query = nn.Linear(d_model, head_size, bias=BIAS)
+        self.value = nn.Linear(d_model, head_size, bias=BIAS)
         # we don't need to use an triangular inferior matrix as it is bidirectional.
         # However, we want to adapt the mask to the input sequence length
         self.dropout = nn.Dropout(dropout)
@@ -368,8 +375,12 @@ class Cross_Attention(nn.Module):
     def forward(self, x, y, valid_lens_x, valid_lens_y, forward_mask=None):
         # input of size (batch, time-step, channels)
         # output of size (batch, time-step, head size)
-        k = self.key(x)   # (B,T,hs)
-        q = self.query(y) # (B,T,hs)
+        if RELU:
+            k = torch.relu(self.key(x))   # (B,T,hs)
+            q = torch.relu(self.query(y)) # (B,T,hs)
+        else:
+            k = self.key(x)
+            q = self.query(y)
         self.tril = torch.tril(torch.ones(q.size(1), k.size(1))).to(x.device)  # triangular inferior matrix for GPT 
 
         # compute attention scores ("affinities")
@@ -388,7 +399,11 @@ class Cross_Attention(nn.Module):
         wei = torch.where(row_mask.unsqueeze(2),  torch.zeros_like(wei), torch.softmax(wei, dim=2))
         wei = self.dropout(wei)
         # perform the weighted aggregation of the values
-        v = self.value(x) # (B,T,hs)
+        if RELU:
+            v = torch.relu(self.value(x)) # (B,T,hs)
+        else: 
+            v = self.value(x)
+
         out = wei @ v # (B, T, T) @ (B, T, hs) -> (B, T, hs)
         return out
 
@@ -412,9 +427,6 @@ class MultiHeadCrossAttention(nn.Module):
 
 
 
-
-
-
 class Decoder_Block(nn.Module):
     """ Transformer block: communication followed by computation """
 
@@ -428,12 +440,13 @@ class Decoder_Block(nn.Module):
         self.ln1 = nn.LayerNorm(d_model)
         self.ln2 = nn.LayerNorm(d_model)
         self.ln3 = nn.LayerNorm(d_model)
+        self.ln4 = nn.LayerNorm(d_model)
 
     def forward(self, x, y, valid_lens_x, valid_lens_y, forward_mask=None):
-        y = self.ln1(y + self.sa(y, valid_lens_y, forward_mask))
-        context = self.ca(x, y, valid_lens_x, valid_lens_y, forward_mask)
-        y = self.ln2(y + context)
-        x = self.ln3(y + self.ffwd(y))
+        y = y + self.sa(self.ln1(y), valid_lens_y, forward_mask)
+        y = y + self.ca(self.ln2(x), self.ln3(y), valid_lens_x, valid_lens_y, forward_mask)
+        y = y + self.ffwd(self.ln4(y))
+
         return y
 
 
@@ -456,14 +469,3 @@ class PositionalEncoding(nn.Module):
 
 
 
-
-
-# # Example usage:
-# batch_size = 3
-# input_max_len = 10
-# target_max_len = 12
-# input_valid_lens = torch.tensor([7, 8, 6])
-# target_valid_lens = torch.tensor([9, 10, 11])
-
-# mask = create_cross_attention_mask(input_valid_lens, target_valid_lens, input_max_len, target_max_len)
-# print(mask)

@@ -4,14 +4,142 @@ import os
 import random
 import numpy as np 
 import matplotlib.pyplot as plt
+from transformers import GPT2Tokenizer
 
 from torch.utils.data import Dataset
 
 from torchtext.data.utils import get_tokenizer
+import pandas as pd 
+from torchtext.vocab import vocab 
+from collections import Counter
+from PIL import Image 
+import torch.nn as nn 
+
+
+
+class ImageCaptioningModel(nn.Module):
+    def __init__(self, resnet, gpt2):
+        super(ImageCaptioningModel, self).__init__()
+        self.resnet = resnet 
+        self.gpt2 = gpt2 
+
+        self.proj = nn.Linear(2048, gpt2.config.hidden_size)
+    
+    def forward(self, images, input_ids, attention_mask=None):
+        img_features = self.resnet(images)
+        img_features = img_features.mean([2,3])
+        img_features = self.proj(img_features)
+
+        input_embeddings = self.gpt2.transformer.wte(input_ids)
+        combined_embeddings =  input_embeddings + img_features.unsqueeze(1) 
+
+        outputs = self.gpt2(inputs_embeds=combined_embeddings, attention_mask=attention_mask, labels=input_ids)
+        return outputs 
+
+
+
+def collate_fn(data):
+    # Create GPT2 tokenizer 
+    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    images, captions = zip(*data)
+    images = torch.stack(images, 0)
+    
+    captions = [[tokenizer.bos_token_id] + cap + [tokenizer.eos_token_id] for cap in captions]
+
+    lengths = [len(cap) for cap in captions]
+    targets = torch.zeros(len(captions), max(lengths), dtype=torch.long)
+    # Create attention masks 
+    masks = torch.zeros(len(captions), max(lengths), dtype=torch.long)
+
+    for i, cap in enumerate(captions):
+        end = lengths[i]
+        targets[i, :end] = torch.LongTensor(cap)
+        masks[i, :end] = 1 
+    
+    return images, targets, masks 
 
 
 
 
+
+class Flickr8kDataset(Dataset):
+    def __init__(self, annotations_file, img_dir, tokenizer, transform=None):
+        self.img_dir = img_dir 
+        self.transform = transform 
+        self.img_captions = pd.read_csv(annotations_file)
+        self.tokenizer = tokenizer
+    
+    def __len__(self):
+        return len(self.img_captions)//5
+    
+    def __getitem__(self, idx):
+        file_name = self.img_captions.iloc[5*idx, 0]
+        img_path = os.path.join(self.img_dir, file_name)
+        image = Image.open(img_path)
+        caption = random.choice(self.img_captions.iloc[5*idx : 5*(idx+1), 1].tolist())
+        tokenized_caption = self.tokenizer.encode(caption)
+        if self.transform:
+            image = self.transform(image)
+        return image, tokenized_caption
+
+
+
+
+
+def build_vocabs(tokenized_pairs):
+    # Calculate word frequencies and create a Counter object
+    word_counter_source = Counter(word for pair in tokenized_pairs for word in pair[0])
+    word_counter_target = Counter(word for pair in tokenized_pairs for word in pair[1])
+    vocab_source = vocab(word_counter_source, specials = ['<pad>', '<bos>', '<eos>', '<unk>'])
+    vocab_target = vocab(word_counter_target, specials = ['<pad>', '<bos>', '<eos>', '<unk>'])
+    
+    return vocab_source, vocab_target
+
+class TatoebaDataset(Dataset):
+    def __init__(self, tokenized_pairs, vocab_source, vocab_target):
+        self.tokenized_pairs = tokenized_pairs
+        self.vocab_source = vocab_source
+        self.vocab_target = vocab_target 
+
+    def __len__(self):
+        return len(self.tokenized_pairs)
+    
+    def __getitem__(self, idx):
+        input_seq, target_seq = self.tokenized_pairs[idx]
+
+        input_seq = torch.tensor([self.vocab_source[token] for token in input_seq])
+        input_seq = torch.cat((input_seq, torch.tensor([self.vocab_source['<eos>']])))
+
+        target_seq = torch.tensor([self.vocab_target[token] for token in target_seq])
+
+        label_seq = torch.cat((target_seq, torch.tensor([self.vocab_target['<eos>']])))
+
+        target_seq = torch.cat((torch.tensor([self.vocab_target['<bos>']]), target_seq))
+        input_seq_length = len(input_seq)
+        target_seq_length = len(target_seq)
+        
+        return {
+            'input_seq': input_seq,
+            'target_seq': target_seq,
+            'label_seq' : label_seq,
+            'input_seq_length': input_seq_length,
+            'target_seq_length': target_seq_length
+        }
+
+    
+def create_tokenized_pairs(file_path, source_column, target_column, source_tokenizer, target_tokenizer, max_sequence_length=50):
+    df = pd.read_csv(file_path, delimiter='\t', header=None)
+    # df = df.head(20)
+    source_data = df[source_column].tolist()
+    target_data = df[target_column].tolist()
+    sentence_pairs = list(zip(source_data, target_data))
+    tokenized_pairs = []
+    for source, target in sentence_pairs:
+        source_tokens = source_tokenizer(source)
+        target_tokens = target_tokenizer(target)
+        if len(source_tokens) < max_sequence_length and len(target_tokens) < max_sequence_length:
+            tokenized_pairs.append((source_tokens, target_tokens))
+    return tokenized_pairs
 
 
 
