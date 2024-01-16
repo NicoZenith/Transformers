@@ -124,7 +124,3 @@ for e in range(num_epochs):
 
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
 print(decode(model.generate(context, max_new_tokens=300, valid_lens=None, forward_mask=True)[0].tolist()))
-
-
-
-
